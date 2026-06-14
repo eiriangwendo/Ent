@@ -1,0 +1,137 @@
+{{/*
+Copyright 2019-present Facebook Inc. All rights reserved.
+This source code is licensed under the Apache 2.0 license found
+in the LICENSE file in the root directory of this source tree.
+*/}}
+
+{{ define "tx" }}
+
+{{ $pkg := base $.Config.Package }}
+{{ template "header" $ }}
+
+// Tx is a transactional client that is returned by a transaction.
+type Tx struct {
+	config
+	// driver is the transaction driver.
+	driver ent.Tx
+	// onCommit holds the hooks that are executed on commit.
+	onCommit []CommitHook
+	// onRollback holds the hooks that are executed on rollback.
+	onRollback []RollbackHook
+}
+
+// Commit commits the transaction.
+func (tx *Tx) Commit() error {
+	if err := tx.driver.Commit(); err != nil {
+		return err
+	}
+	for i := len(tx.onCommit) - 1; i >= 0; i-- {
+		if err := tx.onCommit[i](tx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Rollback rollbacks the transaction.
+func (tx *Tx) Rollback() error {
+	if err := tx.driver.Rollback(); err != nil {
+		return err
+	}
+	hooks := tx.onRollback
+	tx.onRollback = nil
+	for i := len(hooks) - 1; i >= 0; i-- {
+		if err := hooks[i](tx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Client returns a Client that binds to the current transaction.
+func (tx *Tx) Client() *Client {
+	return &Client{
+		config: tx.config,
+		Schema: tx.Schema,
+		{{- range $n := $.Nodes }}
+			{{ $n.Name }}: New{{ $n.Name }}Client(tx.config),
+		{{- end }}
+	}
+}
+
+{{- range $n := $.Nodes }}
+	{{ $client := print $n.Name "Client" }}
+	// {{ $client }} is a client for the {{ $n.Name }} schema.
+	type {{ $client }} struct {
+		config
+	}
+
+	// Get returns a {{ $n.Name }} entity by its id.
+	func (c *{{ $client }}) Get(ctx context.Context, id {{ $n.ID.Type }}) (*{{ $n.Name }}, error) {
+		return c.Query().Where({{ $n.Package }}.ID(id)).Only(ctx)
+	}
+
+	// GetX is like Get, but panics if an error occurs.
+	func (c *{{ $client }}) GetX(ctx context.Context, id {{ $n.ID.Type }}) *{{ $n.Name }} {
+		obj, err := c.Get(ctx, id)
+		if err != nil {
+			panic(err)
+		}
+		return obj
+	}
+
+	// Query returns a query builder for {{ $n.Name }}.
+	func (c *{{ $client }}) Query() *{{ $n.QueryName }} {
+		return &{{ $n.QueryName }}{
+			config: c.config,
+			ctx: &QueryContext{Type: Type{{ $n.Name }}},
+		}
+	}
+
+	// Create returns a builder for creating a {{ $n.Name }} entity.
+	func (c *{{ $client }}) Create() *{{ $n.CreateName }} {
+		return &{{ $n.CreateName }}{config: c.config, mutation: new{{ $n.Name }}Mutation(c.config, OpCreate)}
+	}
+
+	// CreateBulk returns a builder for creating a bulk of {{ $n.Name }} entities.
+	func (c *{{ $client }}) CreateBulk(builders ...*{{ $n.CreateName }}) *{{ $n.CreateBulkName }} {
+		return &{{ $n.CreateBulkName }}{config: c.config, builders: builders}
+	}
+
+	// Update returns an update builder for {{ $n.Name }}.
+	func (c *{{ $client }}) Update() *{{ $n.UpdateName }} {
+		return &{{ $n.UpdateName }}{config: c.config, mutation: new{{ $n.Name }}Mutation(c.config, OpUpdate)}
+	}
+
+	// UpdateOne returns an update builder for the given entity.
+	func (c *{{ $client }}) UpdateOne(e *{{ $n.Name }}) *{{ $n.UpdateOneName }} {
+		mutation := new{{ $n.Name }}Mutation(c.config, OpUpdateOne, with{{ $n.Name }}(e))
+		return &{{ $n.UpdateOneName }}{config: c.config, mutation: mutation}
+	}
+
+	// UpdateOneID returns an update builder for the given id.
+	func (c *{{ $client }}) UpdateOneID(id {{ $n.ID.Type }}) *{{ $n.UpdateOneName }} {
+		mutation := new{{ $n.Name }}Mutation(c.config, OpUpdateOne, with{{ $n.Name }}ID(id))
+		return &{{ $n.UpdateOneName }}{config: c.config, mutation: mutation}
+	}
+
+	// Delete returns a delete builder for {{ $n.Name }}.
+	func (c *{{ $client }}) Delete() *{{ $n.DeleteName }} {
+		return &{{ $n.DeleteName }}{config: c.config, mutation: new{{ $n.Name }}Mutation(c.config, OpDelete)}
+	}
+
+	// DeleteOne returns a builder for deleting the given entity.
+	func (c *{{ $client }}) DeleteOne(e *{{ $n.Name }}) *{{ $n.DeleteOneName }} {
+		return &{{ $n.DeleteOneName }}{c.DeleteOneID(e.ID)}
+	}
+
+	// DeleteOneID returns a builder for deleting the given entity by its id.
+	func (c *{{ $client }}) DeleteOneID(id {{ $n.ID.Type }}) *{{ $n.DeleteOneName }} {
+		builder := c.Delete().Where({{ $n.Package }}.ID(id))
+		builder.mutation.id = &id
+		builder.mutation.op = OpDeleteOne
+		return &{{ $n.DeleteOneName }}{builder}
+	}
+{{- end }}
+
+{{ end }}
